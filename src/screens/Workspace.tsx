@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import type { Session } from '@supabase/supabase-js'
-import { Activity, ArrowRight, CalendarDays, Check, ChevronRight, CircleHelp, Heart, Home, LogOut, Menu, Moon, Plus, ShieldCheck, Sparkles, Sun, X } from 'lucide-react'
+import { Activity, ArrowRight, CalendarDays, Check, ChevronLeft, ChevronRight, CircleHelp, Heart, Home, LogOut, Menu, Moon, Plus, ShieldCheck, Sparkles, Sun, X } from 'lucide-react'
 import { addDays, dayNumberBetween, formatDate, localDateString } from '../lib/dates'
 import { supabase } from '../lib/supabase'
 
-type Page = 'overview' | 'cycle' | 'daily-log'
+type Page = 'overview' | 'calendar' | 'cycle' | 'daily-log'
 type CycleSettings = {
   user_id: string
   average_cycle_length: number | null
@@ -50,7 +50,7 @@ export function Workspace({ session, onSignOut }: { session: Session; onSignOut:
     const [profileResult, cycleResult, logsResult] = await Promise.all([
       supabase.from('profiles').select('display_name').eq('id', user.id).maybeSingle(),
       supabase.from('cycle_settings').select('*').eq('user_id', user.id).maybeSingle(),
-      supabase.from('daily_logs').select('*').eq('user_id', user.id).order('log_date', { ascending: false }).limit(8),
+      supabase.from('daily_logs').select('*').eq('user_id', user.id).order('log_date', { ascending: false }).limit(366),
     ])
     const issue = profileResult.error || cycleResult.error || logsResult.error
     if (issue) setError(issue.message)
@@ -125,6 +125,7 @@ export function Workspace({ session, onSignOut }: { session: Session; onSignOut:
 
   const navItems: { id: Page; label: string; icon: typeof Home }[] = [
     { id: 'overview', label: 'Overview', icon: Home },
+    { id: 'calendar', label: 'Calendar', icon: CalendarDays },
     { id: 'cycle', label: 'My cycle', icon: CalendarDays },
     { id: 'daily-log', label: 'Daily check-in', icon: Heart },
   ]
@@ -148,7 +149,7 @@ export function Workspace({ session, onSignOut }: { session: Session; onSignOut:
       <main className="main-panel">
         <header className="workspace-header">
           <button className="mobile-menu icon-button" aria-label="Open menu" onClick={() => setMobileNavOpen(true)}><Menu size={20} /></button>
-          <div className="header-title"><span>{greeting}, {displayName}</span><h1>{page === 'overview' ? 'Your cycle space' : page === 'cycle' ? 'My cycle' : 'Daily check-in'}</h1></div>
+          <div className="header-title"><span>{greeting}, {displayName}</span><h1>{page === 'overview' ? 'Your cycle space' : page === 'calendar' ? 'Cycle calendar' : page === 'cycle' ? 'My cycle' : 'Daily check-in'}</h1></div>
           <div className="header-date"><CalendarDays size={17} /><span>{new Intl.DateTimeFormat(undefined, { weekday: 'short', month: 'short', day: 'numeric' }).format(new Date())}</span></div>
         </header>
 
@@ -158,6 +159,7 @@ export function Workspace({ session, onSignOut }: { session: Session; onSignOut:
           {loading ? <div className="content-loading"><span className="loading-heart" />Loading your private space…</div> : (
             <>
               {page === 'overview' && <OverviewPage displayName={displayName} cycle={cycle} todayLog={todayLog} recentLogs={recentLogs} goTo={goTo} />}
+              {page === 'calendar' && <CalendarPage cycle={cycle} logs={recentLogs} />}
               {page === 'cycle' && <CyclePage cycle={cycle} onSubmit={saveCycle} />}
               {page === 'daily-log' && <DailyLogPage todayLog={todayLog} onSubmit={saveDailyLog} />}
             </>
@@ -165,6 +167,49 @@ export function Workspace({ session, onSignOut }: { session: Session; onSignOut:
         </div>
         <footer className="workspace-footer"><ShieldCheck size={15} /> Your cycle details are private and visible only to you.</footer>
       </main>
+    </div>
+  )
+}
+
+function CalendarPage({ cycle, logs }: { cycle: CycleSettings | null; logs: DailyLog[] }) {
+  const [visibleMonth, setVisibleMonth] = useState(() => {
+    const now = new Date()
+    return new Date(now.getFullYear(), now.getMonth(), 1)
+  })
+  const year = visibleMonth.getFullYear()
+  const month = visibleMonth.getMonth()
+  const firstWeekday = new Date(year, month, 1).getDay()
+  const monthLength = new Date(year, month + 1, 0).getDate()
+  const today = localDateString()
+  const cycleLength = cycle?.average_cycle_length || 28
+  const periodLength = cycle?.average_period_length || 5
+  const logsByDate = new Map(logs.map((log) => [log.log_date, log]))
+  const cells = Array.from({ length: firstWeekday + monthLength }, (_, index) => {
+    if (index < firstWeekday) return null
+    const date = localDateString(new Date(year, month, index - firstWeekday + 1))
+    const log = logsByDate.get(date)
+    const elapsed = cycle?.last_period_start ? dayNumberBetween(cycle.last_period_start, date) : null
+    const position = elapsed === null ? null : ((elapsed % cycleLength) + cycleLength) % cycleLength
+    return { date, day: index - firstWeekday + 1, period: Boolean(log?.flow_level) || (position !== null && position < periodLength), today: date === today }
+  })
+
+  function moveMonth(amount: number) {
+    setVisibleMonth((current) => new Date(current.getFullYear(), current.getMonth() + amount, 1))
+  }
+
+  return (
+    <div className="form-page cycle-calendar-page">
+      <section className="page-intro"><span className="large-icon"><CalendarDays size={22} /></span><div><p className="eyebrow">YOUR CYCLE, AT A GLANCE</p><h2>Make room for your own rhythm.</h2><p>See recorded period days and gentle estimates based on the cycle details you saved.</p></div></section>
+      <section className="card cycle-calendar-card" aria-label="Cycle calendar">
+        <div className="calendar-toolbar"><h3>{new Intl.DateTimeFormat(undefined, { month: 'long', year: 'numeric' }).format(visibleMonth)}</h3><div className="calendar-controls"><button className="icon-button" type="button" onClick={() => moveMonth(-1)} aria-label="Previous month"><ChevronLeft size={19} /></button><button className="calendar-today" type="button" onClick={() => setVisibleMonth(new Date(new Date().getFullYear(), new Date().getMonth(), 1))}>Today</button><button className="icon-button" type="button" onClick={() => moveMonth(1)} aria-label="Next month"><ChevronRight size={19} /></button></div></div>
+        <div className="cycle-calendar-grid" role="grid" aria-label={new Intl.DateTimeFormat(undefined, { month: 'long', year: 'numeric' }).format(visibleMonth)}>
+          {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((weekday) => <div className="calendar-weekday" role="columnheader" key={weekday}>{weekday}</div>)}
+          {cells.map((cell, index) => cell ? <div className={`calendar-cell ${cell.today ? 'is-today' : ''}`} role="gridcell" aria-label={`${formatDate(cell.date, { weekday: 'long', month: 'long', day: 'numeric' })}${cell.period ? ', period recorded or estimated' : ''}`} key={cell.date}><span className={cell.period ? 'period-day' : ''}>{cell.day}</span>{cell.period && <i aria-hidden="true" />}</div> : <div className="calendar-cell is-empty" aria-hidden="true" key={`empty-${index}`} />)}
+        </div>
+        <div className="calendar-legend"><span><i className="legend-period" /> Period day</span><span><i className="legend-today" /> Today</span></div>
+        {!cycle?.last_period_start && <div className="calendar-empty-note"><CircleHelp size={16} /><span>Add your last period start date in <strong>My cycle</strong> to see estimates. Recorded flow days from your check-ins still appear here.</span></div>}
+        <p className="estimate-note"><CircleHelp size={14} /> Predicted days are estimates from your average cycle length; they may not match your body. This calendar is not a medical or contraception tool.</p>
+      </section>
     </div>
   )
 }
